@@ -8,10 +8,12 @@ spring:
       target: "localhost:7233"
     namespaces:
       - namespace: greeting
+        alias: greeting
         workers-auto-discovery:
           packages:
             - com.example.spring_temporal.temporal.greeting
       - namespace: farewell
+        alias: farewell
         workers-auto-discovery:
           packages:
             - com.example.spring_temporal.temporal.farewell
