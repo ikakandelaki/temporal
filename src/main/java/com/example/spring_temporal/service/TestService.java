@@ -1,55 +1,38 @@
 package com.example.spring_temporal.service;
 
-import com.example.spring_temporal.temporal.farewell.FarewellWorkflow;
-import com.example.spring_temporal.temporal.greeting.HelloWorkflow;
+import com.example.spring_temporal.temporal.GreetingWorkflow;
 import io.temporal.client.WorkflowClient;
 import io.temporal.client.WorkflowOptions;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 @Service
 public class TestService {
-    private final WorkflowClient greetWorkflowClient;
-    private final WorkflowClient goodbyeWorkflowClient;
+    private final WorkflowClient workflowClient;
+
+    @Value("${app.temporal.task-queue}")
+    private String queue;
 
     public TestService(
-            @Qualifier("greetWorkflowClient") WorkflowClient greetWorkflowClient,
-            @Qualifier("goodbyeWorkflowClient") WorkflowClient goodbyeWorkflowClient
+            WorkflowClient workflowClient
     ) {
-        this.greetWorkflowClient = greetWorkflowClient;
-        this.goodbyeWorkflowClient = goodbyeWorkflowClient;
+        this.workflowClient = workflowClient;
     }
-
-    @Value("${app.temporal.greeting-task-queue}")
-    private String greetingTaskQueue;
-
-    @Value("${app.temporal.farewell-task-queue}")
-    private String farewellTaskQueue;
 
     public String test() {
         try {
-            HelloWorkflow helloWorkflow = greetWorkflowClient.newWorkflowStub(
-                    HelloWorkflow.class,
-                    getWorkflowOptions("hello-workflow", greetingTaskQueue)
-            );
-            String saidHello = helloWorkflow.sayHello("Irakli");
+            WorkflowOptions wfOptions = WorkflowOptions.newBuilder()
+                    .setWorkflowId("greeting-wf")
+                    .setTaskQueue(queue)
+                    .build();
 
-            FarewellWorkflow farewellWorkflow = goodbyeWorkflowClient.newWorkflowStub(
-                    FarewellWorkflow.class,
-                    getWorkflowOptions("farewell-workflow", farewellTaskQueue)
+            GreetingWorkflow greetingWorkflow = workflowClient.newWorkflowStub(
+                    GreetingWorkflow.class,
+                    wfOptions
             );
-            String saidGoodbye = farewellWorkflow.sayGoodbye("Irakli");
-            return saidHello + " and " + saidGoodbye;
+            return greetingWorkflow.sayHi("Irakli");
         } catch (Exception e) {
             return "Exception: " + e.getMessage();
         }
-    }
-
-    private WorkflowOptions getWorkflowOptions(String workflowId, String taskQueue) {
-        return WorkflowOptions.newBuilder()
-                .setWorkflowId(workflowId)
-                .setTaskQueue(taskQueue)
-                .build();
     }
 }

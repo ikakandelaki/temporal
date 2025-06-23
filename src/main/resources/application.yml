@@ -6,21 +6,14 @@ spring:
     connection:
       enable-https: false
       target: "localhost:7233"
-    namespaces:
-      - namespace: greeting
-        workers-auto-discovery:
-          packages:
-            - com.example.spring_temporal.temporal.greeting
-      - namespace: farewell
-        workers-auto-discovery:
-          packages:
-            - com.example.spring_temporal.temporal.farewell
-
+    namespace: greeting
+    workers-auto-discovery:
+      packages:
+        - com.example.spring_temporal.temporal.worker
 
 server:
   port: 9000
 
 app:
   temporal:
-    greeting-task-queue: "greeting-queue"
-    farewell-task-queue: "farewell-queue"
+    task-queue: "greeting-queue"
