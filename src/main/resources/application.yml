@@ -1,3 +1,10 @@
+server:
+  port: 9000
+
+app:
+  temporal:
+    migration-queue: "migration-queue"
+
 spring:
   application:
     name: spring-boot-temporal
@@ -6,23 +13,5 @@ spring:
     connection:
       enable-https: false
       target: "localhost:7233"
-    namespaces:
-      - namespace: greeting
-        alias: greeting
-        workers-auto-discovery:
-          packages:
-            - com.example.spring_temporal.temporal.greeting
-      - namespace: farewell
-        alias: farewell
-        workers-auto-discovery:
-          packages:
-            - com.example.spring_temporal.temporal.farewell
-
-
-server:
-  port: 9000
-
-app:
-  temporal:
-    greeting-task-queue: "greeting-queue"
-    farewell-task-queue: "farewell-queue"
+    workers-auto-discovery:
+      packages: com.example.spring_temporal
