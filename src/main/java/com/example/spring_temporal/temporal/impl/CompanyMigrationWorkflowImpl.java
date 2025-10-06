@@ -6,6 +6,7 @@ import com.example.spring_temporal.temporal.CompanyMigrationWorkflow;
 import com.example.spring_temporal.temporal.MigrationStarterWorkflow;
 import io.temporal.activity.ActivityOptions;
 import io.temporal.common.RetryOptions;
+import io.temporal.failure.CanceledFailure;
 import io.temporal.failure.TemporalFailure;
 import io.temporal.spring.boot.WorkflowImpl;
 import io.temporal.workflow.Saga;
@@ -18,7 +19,6 @@ import java.time.Duration;
 public class CompanyMigrationWorkflowImpl implements CompanyMigrationWorkflow {
     Saga saga = new Saga(new Saga.Options.Builder().build());
     private boolean commit = false;
-    private boolean rollback = false;
 
     @Override
     public void migrate(Company company) {
@@ -40,15 +40,18 @@ public class CompanyMigrationWorkflowImpl implements CompanyMigrationWorkflow {
             }
 
             sendReadyToCommitSignalToParent();
-            commitOrRollback(companyMigrationActivity);
+            Workflow.await(() -> commit);
+            companyMigrationActivity.executeActivity("commit", Workflow.getInfo().getWorkflowId());
+        } catch (CanceledFailure e) {
+            System.out.println("Cancelling: " + Workflow.getInfo().getWorkflowId());
+            saga.compensate();
+            throw e;
         } catch (TemporalFailure e) {
             sendReadyToRollbackSignalToParent();
-            Workflow.await(() -> rollback);
             saga.compensate();
             throw e;
         } finally {
             sendFinishSignalToParent();
-            rollback = false;
             commit = false;
         }
     }
@@ -58,16 +61,6 @@ public class CompanyMigrationWorkflowImpl implements CompanyMigrationWorkflow {
             MigrationStarterWorkflow parentWorkflow = Workflow.newExternalWorkflowStub(MigrationStarterWorkflow.class, workflowId);
             parentWorkflow.signalMigrationWorkflowState(MigrationStarterWorkflow.MigrationWorkflowState.ofReadyToCommit(Workflow.getInfo().getWorkflowId()));
         });
-    }
-
-    private void commitOrRollback(CompanyMigrationActivity companyMigrationActivity) {
-        Workflow.await(() -> commit || rollback);
-        if (commit) {
-            companyMigrationActivity.executeActivity("commit", Workflow.getInfo().getWorkflowId());
-        }
-        if (rollback) {
-            saga.compensate();
-        }
     }
 
     private void sendReadyToRollbackSignalToParent() {
@@ -82,11 +75,6 @@ public class CompanyMigrationWorkflowImpl implements CompanyMigrationWorkflow {
             MigrationStarterWorkflow parentWorkflow = Workflow.newExternalWorkflowStub(MigrationStarterWorkflow.class, workflowId);
             parentWorkflow.signalMigrationWorkflowState(MigrationStarterWorkflow.MigrationWorkflowState.ofFinished(Workflow.getInfo().getWorkflowId()));
         });
-    }
-
-    @Override
-    public void signalRollback() {
-        rollback = true;
     }
 
     @Override

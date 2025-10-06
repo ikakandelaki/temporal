@@ -4,6 +4,7 @@ import com.example.spring_temporal.domain.Company;
 import com.example.spring_temporal.temporal.CompanyMigrationWorkflow;
 import com.example.spring_temporal.temporal.MigrationStarterWorkflow;
 import com.example.spring_temporal.temporal.MigrationWorkflowStatus;
+import io.temporal.client.WorkflowStub;
 import io.temporal.spring.boot.WorkflowImpl;
 import io.temporal.workflow.Async;
 import io.temporal.workflow.ChildWorkflowOptions;
@@ -19,7 +20,7 @@ import java.util.Set;
 public class MigrationStarterWorkflowImpl implements MigrationStarterWorkflow {
     private final Set<String> finishedMigrationWorkflowIds = new HashSet<>();
     private final Set<String> readyToCommitMigrationWorkflowIds = new HashSet<>();
-    private boolean rollback = false;
+    private final Set<String> failedWorkflowIds = new HashSet<>();
 
     @Override
     public void start(Company rootCompany, Set<Company> childrenCompanies) {
@@ -49,7 +50,7 @@ public class MigrationStarterWorkflowImpl implements MigrationStarterWorkflow {
             }
         }
 
-        Workflow.await(() -> readyToCommitMigrationWorkflowIds.equals(startedCompanyMigrationWorkflowIds) || rollback);
+        Workflow.await(() -> readyToCommitMigrationWorkflowIds.equals(startedCompanyMigrationWorkflowIds) || !failedWorkflowIds.isEmpty());
         commitOrRollbackAllCompanies(startedCompanyMigrationWorkflowIds, startedCompanyMigrationWorkflows);
         Workflow.await(() -> finishedMigrationWorkflowIds.equals(startedCompanyMigrationWorkflowIds));
         resetSignalVariables();
@@ -71,15 +72,18 @@ public class MigrationStarterWorkflowImpl implements MigrationStarterWorkflow {
         if (commit) {
             startedCompanyMigrationWorkflows.forEach(CompanyMigrationWorkflow::signalCommit);
         }
-        if (rollback) {
-            startedCompanyMigrationWorkflows.forEach(CompanyMigrationWorkflow::signalRollback);
+        if (!failedWorkflowIds.isEmpty()) {
+            startedCompanyMigrationWorkflows.stream()
+                    .map(WorkflowStub::fromTyped)
+                    .filter(workflowStub -> !failedWorkflowIds.contains(workflowStub.getExecution().getWorkflowId()))
+                    .forEach(WorkflowStub::cancel);
         }
     }
 
     private void resetSignalVariables() {
         readyToCommitMigrationWorkflowIds.clear();
         finishedMigrationWorkflowIds.clear();
-        rollback = false;
+        failedWorkflowIds.clear();
     }
 
     @Override
@@ -91,7 +95,7 @@ public class MigrationStarterWorkflowImpl implements MigrationStarterWorkflow {
             finishedMigrationWorkflowIds.add(migrationWorkflowState.migrationWorkflowId());
         }
         if (migrationWorkflowState.workflowStatus() == MigrationWorkflowStatus.READY_TO_ROLLBACK) {
-            rollback = true;
+            failedWorkflowIds.add(migrationWorkflowState.migrationWorkflowId());
         }
     }
 }
