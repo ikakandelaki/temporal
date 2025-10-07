@@ -16,10 +16,6 @@ public interface MigrationStarterWorkflow {
     void signalMigrationWorkflowState(MigrationWorkflowState migrationWorkflowState);
 
     record MigrationWorkflowState(String migrationWorkflowId, MigrationWorkflowStatus workflowStatus) {
-        public static MigrationWorkflowState ofFinished(String migrationWorkflowId) {
-            return new MigrationWorkflowState(migrationWorkflowId, MigrationWorkflowStatus.FINISHED);
-        }
-
         public static MigrationWorkflowState ofReadyToRollback(String migrationWorkflowId) {
             return new MigrationWorkflowState(migrationWorkflowId, MigrationWorkflowStatus.READY_TO_ROLLBACK);
         }
