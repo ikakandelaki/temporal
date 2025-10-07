@@ -4,82 +4,118 @@ import com.example.spring_temporal.domain.Company;
 import com.example.spring_temporal.temporal.CompanyMigrationWorkflow;
 import com.example.spring_temporal.temporal.MigrationStarterWorkflow;
 import com.example.spring_temporal.temporal.MigrationWorkflowStatus;
+import io.temporal.failure.ApplicationFailure;
+import io.temporal.failure.CanceledFailure;
+import io.temporal.failure.TemporalFailure;
 import io.temporal.spring.boot.WorkflowImpl;
 import io.temporal.workflow.Async;
+import io.temporal.workflow.CancellationScope;
 import io.temporal.workflow.ChildWorkflowOptions;
+import io.temporal.workflow.Promise;
 import io.temporal.workflow.Workflow;
 
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 @SuppressWarnings("unused")
 @WorkflowImpl(taskQueues = "${app.temporal.migration-queue}")
 public class MigrationStarterWorkflowImpl implements MigrationStarterWorkflow {
-    private final Set<String> finishedMigrationWorkflowIds = new HashSet<>();
     private final Set<String> readyToCommitMigrationWorkflowIds = new HashSet<>();
-    private boolean rollback = false;
+    private String failedWorkflowId = null;
+
+    private record CompanyMigrationWorkflowInfo(
+            String workflowId,
+            CompanyMigrationWorkflow migrationWorkflow,
+            Promise<Void> migrationPromise,
+            CancellationScope cancellationScope
+    ) {
+
+    }
 
     @Override
     public void start(Company rootCompany, Set<Company> childrenCompanies) {
-        System.out.println("Starting Migration Starter Workflow");
-
         String starterWorkflowId = Workflow.getInfo().getWorkflowId();
         Set<String> startedCompanyMigrationWorkflowIds = new HashSet<>();
-        List<CompanyMigrationWorkflow> startedCompanyMigrationWorkflows = new ArrayList<>();
+        List<CompanyMigrationWorkflowInfo> startedCompanyMigrationWorkflows = new ArrayList<>();
 
         String rootCompanyMigrationWorkflowId = "%s-root-company-%s".formatted(starterWorkflowId, rootCompany.id());
-        CompanyMigrationWorkflow rootCompanyMigrationWorkflow = Workflow.newChildWorkflowStub(CompanyMigrationWorkflow.class,
-                childWorkflowOptions(rootCompanyMigrationWorkflowId));
-        Async.procedure(rootCompanyMigrationWorkflow::migrate, rootCompany);
-
+        startedCompanyMigrationWorkflows.add(startMigrationWorkflow(rootCompany, rootCompanyMigrationWorkflowId));
         startedCompanyMigrationWorkflowIds.add(rootCompanyMigrationWorkflowId);
-        startedCompanyMigrationWorkflows.add(rootCompanyMigrationWorkflow);
 
         if (childrenCompanies != null && !childrenCompanies.isEmpty()) {
             for (Company childCompany : childrenCompanies) {
                 String childWorkflowId = "%s-child-company-%s".formatted(starterWorkflowId, childCompany.id());
-                CompanyMigrationWorkflow childCompanyMigrationWorkflow = Workflow.newChildWorkflowStub(CompanyMigrationWorkflow.class,
-                        childWorkflowOptions(childWorkflowId));
-                Async.procedure(childCompanyMigrationWorkflow::migrate, childCompany);
-
+                startedCompanyMigrationWorkflows.add(startMigrationWorkflow(childCompany, childWorkflowId));
                 startedCompanyMigrationWorkflowIds.add(childWorkflowId);
-                startedCompanyMigrationWorkflows.add(childCompanyMigrationWorkflow);
             }
         }
 
-        Workflow.await(() -> readyToCommitMigrationWorkflowIds.equals(startedCompanyMigrationWorkflowIds) || rollback);
+        Workflow.await(() -> readyToCommitMigrationWorkflowIds.equals(startedCompanyMigrationWorkflowIds) || failedWorkflowId != null);
         commitOrRollbackAllCompanies(startedCompanyMigrationWorkflowIds, startedCompanyMigrationWorkflows);
-        Workflow.await(() -> finishedMigrationWorkflowIds.equals(startedCompanyMigrationWorkflowIds));
+
+        getMigrationWorkflowResults(startedCompanyMigrationWorkflows);
+
+        boolean shouldFail = failedWorkflowId != null;
         resetSignalVariables();
-        System.out.println("Ended Migration Starter Workflow");
+
+        if (shouldFail) {
+            throw ApplicationFailure.newNonRetryableFailure("", "");
+        }
     }
 
-    private ChildWorkflowOptions childWorkflowOptions(String workflowId) {
-        return ChildWorkflowOptions.newBuilder()
+    private CompanyMigrationWorkflowInfo startMigrationWorkflow(Company company, String workflowId) {
+        ChildWorkflowOptions childWorkflowOptions = ChildWorkflowOptions.newBuilder()
                 .setWorkflowId(workflowId)
                 .setTaskQueue(Workflow.getInfo().getTaskQueue())
                 .build();
+
+        CompanyMigrationWorkflow migrationWorkflow = Workflow.newChildWorkflowStub(CompanyMigrationWorkflow.class,
+                childWorkflowOptions);
+
+        AtomicReference<Promise<Void>> promiseAtomicReference = new AtomicReference<>();
+        CancellationScope cancellationScope = Workflow.newCancellationScope(() ->
+                promiseAtomicReference.set(Async.procedure(migrationWorkflow::migrate, company)));
+        cancellationScope.run();
+
+        return new CompanyMigrationWorkflowInfo(workflowId, migrationWorkflow, promiseAtomicReference.get(), cancellationScope);
     }
 
     private void commitOrRollbackAllCompanies(
             Set<String> startedCompanyMigrationWorkflowIds,
-            List<CompanyMigrationWorkflow> startedCompanyMigrationWorkflows
-    ) {
-        boolean commit = readyToCommitMigrationWorkflowIds.equals(startedCompanyMigrationWorkflowIds);
-        if (commit) {
-            startedCompanyMigrationWorkflows.forEach(CompanyMigrationWorkflow::signalCommit);
+            List<CompanyMigrationWorkflowInfo> startedCompanyMigrationWorkflows) {
+        boolean allReadyToCommit = readyToCommitMigrationWorkflowIds.equals(startedCompanyMigrationWorkflowIds);
+        boolean anyFailed = failedWorkflowId != null;
+        if (allReadyToCommit) {
+            startedCompanyMigrationWorkflows.forEach(e -> e.migrationWorkflow().signalCommit());
         }
-        if (rollback) {
-            startedCompanyMigrationWorkflows.forEach(CompanyMigrationWorkflow::signalRollback);
+        if (anyFailed) {
+            startedCompanyMigrationWorkflows.stream()
+                    .filter(workflowInfo -> !failedWorkflowId.equals(workflowInfo.workflowId()))
+                    .forEach(workflowInfo -> workflowInfo.cancellationScope().cancel());
         }
+    }
+
+    private void getMigrationWorkflowResults(List<CompanyMigrationWorkflowInfo> startedCompanyMigrationWorkflows) {
+        startedCompanyMigrationWorkflows.forEach(workflowInfo -> {
+            try {
+                workflowInfo.migrationPromise().get();
+                System.out.println("Migration completed: " + workflowInfo.workflowId());
+            } catch (TemporalFailure e) {
+                if (e.getCause() instanceof CanceledFailure) {
+                    System.out.println("Workflow migration canceled: " + workflowInfo.workflowId());
+                } else {
+                    System.out.println("Workflow migration failed: " + workflowInfo.workflowId());
+                }
+            }
+        });
     }
 
     private void resetSignalVariables() {
         readyToCommitMigrationWorkflowIds.clear();
-        finishedMigrationWorkflowIds.clear();
-        rollback = false;
+        failedWorkflowId = null;
     }
 
     @Override
@@ -87,11 +123,8 @@ public class MigrationStarterWorkflowImpl implements MigrationStarterWorkflow {
         if (migrationWorkflowState.workflowStatus() == MigrationWorkflowStatus.READY_TO_COMMIT) {
             readyToCommitMigrationWorkflowIds.add(migrationWorkflowState.migrationWorkflowId());
         }
-        if (migrationWorkflowState.workflowStatus() == MigrationWorkflowStatus.FINISHED) {
-            finishedMigrationWorkflowIds.add(migrationWorkflowState.migrationWorkflowId());
-        }
         if (migrationWorkflowState.workflowStatus() == MigrationWorkflowStatus.READY_TO_ROLLBACK) {
-            rollback = true;
+            failedWorkflowId = migrationWorkflowState.migrationWorkflowId();
         }
     }
 }
