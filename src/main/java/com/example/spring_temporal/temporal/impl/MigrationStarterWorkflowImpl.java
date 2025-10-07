@@ -53,12 +53,12 @@ public class MigrationStarterWorkflowImpl implements MigrationStarterWorkflow {
             }
         }
 
-        Workflow.await(() -> readyToCommitMigrationWorkflowIds.equals(startedCompanyMigrationWorkflowIds) || failedWorkflowId != null);
+        Workflow.await(() -> allMigrationsAreReadyToCommit(startedCompanyMigrationWorkflowIds) || oneOfTheMigrationsFailed());
         commitOrRollbackAllCompanies(startedCompanyMigrationWorkflowIds, startedCompanyMigrationWorkflows);
 
         getMigrationWorkflowResults(startedCompanyMigrationWorkflows);
 
-        boolean shouldFail = failedWorkflowId != null;
+        boolean shouldFail = oneOfTheMigrationsFailed();
         resetSignalVariables();
 
         if (shouldFail) {
@@ -83,15 +83,21 @@ public class MigrationStarterWorkflowImpl implements MigrationStarterWorkflow {
         return new CompanyMigrationWorkflowInfo(workflowId, migrationWorkflow, promiseAtomicReference.get(), cancellationScope);
     }
 
+    private boolean allMigrationsAreReadyToCommit(Set<String> startedCompanyMigrationWorkflowIds) {
+        return readyToCommitMigrationWorkflowIds.equals(startedCompanyMigrationWorkflowIds);
+    }
+
+    private boolean oneOfTheMigrationsFailed() {
+        return failedWorkflowId != null;
+    }
+
     private void commitOrRollbackAllCompanies(
             Set<String> startedCompanyMigrationWorkflowIds,
             List<CompanyMigrationWorkflowInfo> startedCompanyMigrationWorkflows) {
-        boolean allReadyToCommit = readyToCommitMigrationWorkflowIds.equals(startedCompanyMigrationWorkflowIds);
-        boolean anyFailed = failedWorkflowId != null;
-        if (allReadyToCommit) {
+        if (allMigrationsAreReadyToCommit(startedCompanyMigrationWorkflowIds)) {
             startedCompanyMigrationWorkflows.forEach(e -> e.migrationWorkflow().signalCommit());
         }
-        if (anyFailed) {
+        if (oneOfTheMigrationsFailed()) {
             startedCompanyMigrationWorkflows.stream()
                     .filter(workflowInfo -> !failedWorkflowId.equals(workflowInfo.workflowId()))
                     .forEach(workflowInfo -> workflowInfo.cancellationScope().cancel());
