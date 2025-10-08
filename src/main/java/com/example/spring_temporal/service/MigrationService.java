@@ -1,7 +1,7 @@
 package com.example.spring_temporal.service;
 
 import com.example.spring_temporal.domain.Company;
-import com.example.spring_temporal.temporal.MigrationStarterWorkflow;
+import com.example.spring_temporal.temporal.CompanyMigrationOrchestratorWorkflow;
 import io.temporal.client.WorkflowClient;
 import io.temporal.client.WorkflowOptions;
 import lombok.RequiredArgsConstructor;
@@ -20,9 +20,11 @@ public class MigrationService {
     private String taskQueue;
 
     public void startMigration(Company rootCompany, Set<Company> childrenCompanies) {
-        MigrationStarterWorkflow migrationStarterWorkflow = workflowClient.newWorkflowStub(MigrationStarterWorkflow.class,
-                getWorkflowOptions("group-" + UUID.randomUUID()));
-        WorkflowClient.start(migrationStarterWorkflow::start, rootCompany, childrenCompanies);
+        CompanyMigrationOrchestratorWorkflow companyMigrationOrchestratorWorkflow = workflowClient.newWorkflowStub(
+                CompanyMigrationOrchestratorWorkflow.class,
+                getWorkflowOptions("group-" + UUID.randomUUID())
+        );
+        WorkflowClient.start(companyMigrationOrchestratorWorkflow::start, rootCompany, childrenCompanies);
     }
 
     private WorkflowOptions getWorkflowOptions(String workflowId) {

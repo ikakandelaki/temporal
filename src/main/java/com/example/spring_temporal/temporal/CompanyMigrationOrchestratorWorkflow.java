@@ -8,20 +8,13 @@ import io.temporal.workflow.WorkflowMethod;
 import java.util.Set;
 
 @WorkflowInterface
-public interface MigrationStarterWorkflow {
+public interface CompanyMigrationOrchestratorWorkflow {
     @WorkflowMethod
     void start(Company rootCompany, Set<Company> childrenCompanies);
 
     @SignalMethod
-    void signalMigrationWorkflowState(MigrationWorkflowState migrationWorkflowState);
+    void signalMigrationWorkflowReadinessForCommit(String migrationWorkflowId);
 
-    record MigrationWorkflowState(String migrationWorkflowId, MigrationWorkflowStatus workflowStatus) {
-        public static MigrationWorkflowState ofReadyToRollback(String migrationWorkflowId) {
-            return new MigrationWorkflowState(migrationWorkflowId, MigrationWorkflowStatus.READY_TO_ROLLBACK);
-        }
-
-        public static MigrationWorkflowState ofReadyToCommit(String migrationWorkflowId) {
-            return new MigrationWorkflowState(migrationWorkflowId, MigrationWorkflowStatus.READY_TO_COMMIT);
-        }
-    }
+    @SignalMethod
+    void signalMigrationWorkflowFailure(String migrationWorkflowId);
 }

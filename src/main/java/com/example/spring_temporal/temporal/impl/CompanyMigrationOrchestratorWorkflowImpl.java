@@ -2,8 +2,7 @@ package com.example.spring_temporal.temporal.impl;
 
 import com.example.spring_temporal.domain.Company;
 import com.example.spring_temporal.temporal.CompanyMigrationWorkflow;
-import com.example.spring_temporal.temporal.MigrationStarterWorkflow;
-import com.example.spring_temporal.temporal.MigrationWorkflowStatus;
+import com.example.spring_temporal.temporal.CompanyMigrationOrchestratorWorkflow;
 import io.temporal.failure.ApplicationFailure;
 import io.temporal.failure.CanceledFailure;
 import io.temporal.failure.TemporalFailure;
@@ -22,7 +21,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 @SuppressWarnings("unused")
 @WorkflowImpl(taskQueues = "${app.temporal.migration-queue}")
-public class MigrationStarterWorkflowImpl implements MigrationStarterWorkflow {
+public class CompanyMigrationOrchestratorWorkflowImpl implements CompanyMigrationOrchestratorWorkflow {
     private final Set<String> readyToCommitMigrationWorkflowIds = new HashSet<>();
     private String failedWorkflowId = null;
 
@@ -125,12 +124,12 @@ public class MigrationStarterWorkflowImpl implements MigrationStarterWorkflow {
     }
 
     @Override
-    public void signalMigrationWorkflowState(MigrationWorkflowState migrationWorkflowState) {
-        if (migrationWorkflowState.workflowStatus() == MigrationWorkflowStatus.READY_TO_COMMIT) {
-            readyToCommitMigrationWorkflowIds.add(migrationWorkflowState.migrationWorkflowId());
-        }
-        if (migrationWorkflowState.workflowStatus() == MigrationWorkflowStatus.READY_TO_ROLLBACK) {
-            failedWorkflowId = migrationWorkflowState.migrationWorkflowId();
-        }
+    public void signalMigrationWorkflowReadinessForCommit(String migrationWorkflowId) {
+        readyToCommitMigrationWorkflowIds.add(migrationWorkflowId);
+    }
+
+    @Override
+    public void signalMigrationWorkflowFailure(String migrationWorkflowId) {
+        failedWorkflowId = migrationWorkflowId;
     }
 }

@@ -2,8 +2,8 @@ package com.example.spring_temporal.temporal.impl;
 
 import com.example.spring_temporal.domain.Company;
 import com.example.spring_temporal.temporal.CompanyMigrationActivity;
+import com.example.spring_temporal.temporal.CompanyMigrationOrchestratorWorkflow;
 import com.example.spring_temporal.temporal.CompanyMigrationWorkflow;
-import com.example.spring_temporal.temporal.MigrationStarterWorkflow;
 import io.temporal.activity.ActivityOptions;
 import io.temporal.common.RetryOptions;
 import io.temporal.failure.CanceledFailure;
@@ -31,21 +31,12 @@ public class CompanyMigrationWorkflowImpl implements CompanyMigrationWorkflow {
     @Override
     public void migrate(Company company) {
         String workflowId = Workflow.getInfo().getWorkflowId();
-
-        CompanyMigrationActivity companyMigrationActivity = Workflow.newActivityStub(CompanyMigrationActivity.class, getActivityOptions());
-
         try {
-            saga.addCompensation(companyMigrationActivity::compensateActivity, "step-1", workflowId);
-            if ("FAIL_COMPANY".equals(company.name())) {
-                companyMigrationActivity.executeActivity("step-1", workflowId, Duration.ofSeconds(3));
-                companyMigrationActivity.failingActivity(workflowId);
-            } else {
-                companyMigrationActivity.executeActivity("step-1", workflowId, Duration.ofSeconds(9));
-                saga.addCompensation(companyMigrationActivity::compensateActivity, "step-2", workflowId);
-                companyMigrationActivity.executeActivity("step-2", workflowId, Duration.ofMillis(1));
-            }
+            CompanyMigrationActivity companyMigrationActivity = Workflow.newActivityStub(CompanyMigrationActivity.class,
+                    getActivityOptions());
+            executeSteps(company, companyMigrationActivity, workflowId);
 
-            sendReadyToCommitSignalToParent();
+            sendMigrationWorkflowCommitReadinessSignalToOrchestrator(workflowId);
             Workflow.await(() -> commit);
             companyMigrationActivity.executeActivity("commit", workflowId, Duration.ofMillis(1));
             commit = false;
@@ -53,24 +44,39 @@ public class CompanyMigrationWorkflowImpl implements CompanyMigrationWorkflow {
             if (e.getCause() instanceof CanceledFailure) {
                 Workflow.newDetachedCancellationScope(() -> saga.compensate()).run();
             } else {
+                sendMigrationWorkflowFailureSignalToOrchestrator(workflowId);
                 saga.compensate();
-                sendReadyToRollbackSignalToParent();
             }
             throw e;
         }
     }
 
-    private void sendReadyToCommitSignalToParent() {
-        Workflow.getInfo().getParentWorkflowId().ifPresent(workflowId -> {
-            MigrationStarterWorkflow parentWorkflow = Workflow.newExternalWorkflowStub(MigrationStarterWorkflow.class, workflowId);
-            parentWorkflow.signalMigrationWorkflowState(MigrationStarterWorkflow.MigrationWorkflowState.ofReadyToCommit(Workflow.getInfo().getWorkflowId()));
+    private void executeSteps(Company company, CompanyMigrationActivity companyMigrationActivity, String workflowId) {
+        if ("FAIL_COMPANY".equals(company.name())) {
+            saga.addCompensation(companyMigrationActivity::compensateActivity, "step-1", workflowId);
+            companyMigrationActivity.executeActivity("step-1", workflowId, Duration.ofSeconds(3));
+            companyMigrationActivity.failingActivity(workflowId);
+        } else {
+            saga.addCompensation(companyMigrationActivity::compensateActivity, "step-1", workflowId);
+            companyMigrationActivity.executeActivity("step-1", workflowId, Duration.ofSeconds(2));
+            saga.addCompensation(companyMigrationActivity::compensateActivity, "step-2", workflowId);
+            companyMigrationActivity.executeActivity("step-2", workflowId, Duration.ofSeconds(3));
+        }
+    }
+
+    private void sendMigrationWorkflowCommitReadinessSignalToOrchestrator(String workflowId) {
+        Workflow.getInfo().getParentWorkflowId().ifPresent(orchestratorWorkflowId -> {
+            CompanyMigrationOrchestratorWorkflow parentWorkflow = Workflow.newExternalWorkflowStub(
+                    CompanyMigrationOrchestratorWorkflow.class, orchestratorWorkflowId);
+            parentWorkflow.signalMigrationWorkflowReadinessForCommit(workflowId);
         });
     }
 
-    private void sendReadyToRollbackSignalToParent() {
-        Workflow.getInfo().getParentWorkflowId().ifPresent(workflowId -> {
-            MigrationStarterWorkflow parentWorkflow = Workflow.newExternalWorkflowStub(MigrationStarterWorkflow.class, workflowId);
-            parentWorkflow.signalMigrationWorkflowState(MigrationStarterWorkflow.MigrationWorkflowState.ofReadyToRollback(Workflow.getInfo().getWorkflowId()));
+    private void sendMigrationWorkflowFailureSignalToOrchestrator(String workflowId) {
+        Workflow.getInfo().getParentWorkflowId().ifPresent(orchestratorWorkflowId -> {
+            CompanyMigrationOrchestratorWorkflow orchestratorWorkflow = Workflow.newExternalWorkflowStub(
+                    CompanyMigrationOrchestratorWorkflow.class, orchestratorWorkflowId);
+            orchestratorWorkflow.signalMigrationWorkflowFailure(workflowId);
         });
     }
 
