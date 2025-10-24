@@ -12,4 +12,7 @@ public interface CompanyMigrationWorkflow {
 
     @SignalMethod
     void signalCommit();
+
+    @SignalMethod
+    void signalRollback();
 }

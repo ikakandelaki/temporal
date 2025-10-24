@@ -16,5 +16,5 @@ public interface CompanyMigrationOrchestratorWorkflow {
     void signalMigrationWorkflowReadinessForCommit(String migrationWorkflowId);
 
     @SignalMethod
-    void signalMigrationWorkflowFailure(String migrationWorkflowId);
+    void signalMigrationWorkflowFailure();
 }

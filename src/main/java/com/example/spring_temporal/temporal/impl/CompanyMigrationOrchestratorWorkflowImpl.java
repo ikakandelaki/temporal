@@ -1,14 +1,13 @@
 package com.example.spring_temporal.temporal.impl;
 
 import com.example.spring_temporal.domain.Company;
-import com.example.spring_temporal.temporal.CompanyMigrationWorkflow;
 import com.example.spring_temporal.temporal.CompanyMigrationOrchestratorWorkflow;
+import com.example.spring_temporal.temporal.CompanyMigrationWorkflow;
 import io.temporal.failure.ApplicationFailure;
 import io.temporal.failure.CanceledFailure;
 import io.temporal.failure.TemporalFailure;
 import io.temporal.spring.boot.WorkflowImpl;
 import io.temporal.workflow.Async;
-import io.temporal.workflow.CancellationScope;
 import io.temporal.workflow.ChildWorkflowOptions;
 import io.temporal.workflow.Promise;
 import io.temporal.workflow.Workflow;
@@ -17,19 +16,18 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @SuppressWarnings("unused")
 @WorkflowImpl(taskQueues = "${app.temporal.migration-queue}")
 public class CompanyMigrationOrchestratorWorkflowImpl implements CompanyMigrationOrchestratorWorkflow {
     private final Set<String> readyToCommitMigrationWorkflowIds = new HashSet<>();
-    private String failedWorkflowId = null;
+    private final AtomicBoolean anyMigrationFailed = new AtomicBoolean(false);
 
     private record CompanyMigrationWorkflowInfo(
             String workflowId,
             CompanyMigrationWorkflow migrationWorkflow,
-            Promise<Void> migrationPromise,
-            CancellationScope cancellationScope
+            Promise<Void> migrationPromise
     ) {
 
     }
@@ -52,12 +50,12 @@ public class CompanyMigrationOrchestratorWorkflowImpl implements CompanyMigratio
             }
         }
 
-        Workflow.await(() -> allMigrationsAreReadyToCommit(startedCompanyMigrationWorkflowIds) || oneOfTheMigrationsFailed());
+        Workflow.await(() -> allMigrationsAreReadyToCommit(startedCompanyMigrationWorkflowIds) || anyMigrationFailed());
         commitOrRollbackAllCompanies(startedCompanyMigrationWorkflowIds, startedCompanyMigrationWorkflows);
 
         getMigrationWorkflowResults(startedCompanyMigrationWorkflows);
 
-        boolean shouldFail = oneOfTheMigrationsFailed();
+        boolean shouldFail = anyMigrationFailed();
         resetSignalVariables();
 
         if (shouldFail) {
@@ -74,20 +72,17 @@ public class CompanyMigrationOrchestratorWorkflowImpl implements CompanyMigratio
         CompanyMigrationWorkflow migrationWorkflow = Workflow.newChildWorkflowStub(CompanyMigrationWorkflow.class,
                 childWorkflowOptions);
 
-        AtomicReference<Promise<Void>> promiseAtomicReference = new AtomicReference<>();
-        CancellationScope cancellationScope = Workflow.newCancellationScope(() ->
-                promiseAtomicReference.set(Async.procedure(migrationWorkflow::migrate, company)));
-        cancellationScope.run();
+        Promise<Void> migrationPromise = Async.procedure(migrationWorkflow::migrate, company);
 
-        return new CompanyMigrationWorkflowInfo(workflowId, migrationWorkflow, promiseAtomicReference.get(), cancellationScope);
+        return new CompanyMigrationWorkflowInfo(workflowId, migrationWorkflow, migrationPromise);
     }
 
     private boolean allMigrationsAreReadyToCommit(Set<String> startedCompanyMigrationWorkflowIds) {
         return readyToCommitMigrationWorkflowIds.equals(startedCompanyMigrationWorkflowIds);
     }
 
-    private boolean oneOfTheMigrationsFailed() {
-        return failedWorkflowId != null;
+    private boolean anyMigrationFailed() {
+        return anyMigrationFailed.get();
     }
 
     private void commitOrRollbackAllCompanies(
@@ -96,10 +91,8 @@ public class CompanyMigrationOrchestratorWorkflowImpl implements CompanyMigratio
         if (allMigrationsAreReadyToCommit(startedCompanyMigrationWorkflowIds)) {
             startedCompanyMigrationWorkflows.forEach(e -> e.migrationWorkflow().signalCommit());
         }
-        if (oneOfTheMigrationsFailed()) {
-            startedCompanyMigrationWorkflows.stream()
-                    .filter(workflowInfo -> !failedWorkflowId.equals(workflowInfo.workflowId()))
-                    .forEach(workflowInfo -> workflowInfo.cancellationScope().cancel());
+        if (anyMigrationFailed()) {
+            startedCompanyMigrationWorkflows.forEach(e -> e.migrationWorkflow().signalRollback());
         }
     }
 
@@ -120,7 +113,7 @@ public class CompanyMigrationOrchestratorWorkflowImpl implements CompanyMigratio
 
     private void resetSignalVariables() {
         readyToCommitMigrationWorkflowIds.clear();
-        failedWorkflowId = null;
+        anyMigrationFailed.set(false);
     }
 
     @Override
@@ -129,7 +122,7 @@ public class CompanyMigrationOrchestratorWorkflowImpl implements CompanyMigratio
     }
 
     @Override
-    public void signalMigrationWorkflowFailure(String migrationWorkflowId) {
-        failedWorkflowId = migrationWorkflowId;
+    public void signalMigrationWorkflowFailure() {
+        anyMigrationFailed.set(true);
     }
 }
